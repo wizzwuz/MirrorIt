@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">MirrorIt</string>
+    <string name="accessibility_service_label">MirrorIt Remote Input Service</string>
+    <string name="accessibility_service_description">Allows MirrorIt to inject touch and key events when controlled remotely without Shizuku.</string>
+</resources>
