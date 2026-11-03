@@ -109,21 +109,41 @@ fun RemoteViewerScreen(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.85f)),
+                    .background(Color.Black.copy(alpha = 0.9f))
+                    .padding(24.dp),
                 contentAlignment = Alignment.Center
             ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Column(
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
                     Text(
                         text = "Connection Lost or Refused",
-                        color = Color.Red,
-                        fontSize = 16.sp
+                        color = Color(0xFFEF4444),
+                        fontSize = 18.sp,
+                        fontWeight = androidx.compose.ui.text.font.FontWeight.Bold
                     )
-                    Spacer(modifier = Modifier.height(12.dp))
-                    Button(
-                        onClick = onDisconnect,
-                        colors = ButtonDefaults.buttonColors(containerColor = DarkSurface)
-                    ) {
-                        Text("Return to Menu", color = TextPrimary)
+                    Text(
+                        text = "Could not connect to $hostIp:$hostPort.\n\nPlease check:\n1. The Host device has tapped 'Start Screen Sharing' and granted the capture prompt.\n2. Both devices are connected to the same Wi-Fi or Hotspot.",
+                        color = TextPrimary.copy(alpha = 0.8f),
+                        fontSize = 13.sp,
+                        textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                        lineHeight = 18.sp
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = { streamer?.start() },
+                            colors = ButtonDefaults.buttonColors(containerColor = NeonCyan, contentColor = Color.Black)
+                        ) {
+                            Text("Retry Connection")
+                        }
+                        Button(
+                            onClick = onDisconnect,
+                            colors = ButtonDefaults.buttonColors(containerColor = DarkSurface)
+                        ) {
+                            Text("Back to Menu", color = TextPrimary)
+                        }
                     }
                 }
             }

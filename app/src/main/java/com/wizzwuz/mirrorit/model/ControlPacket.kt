@@ -2,8 +2,11 @@ package com.wizzwuz.mirrorit.model
 
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.EOFException
 
 sealed class ControlPacket {
+
+    object Ping : ControlPacket()
 
     data class Touch(
         val action: Int,          // 0: DOWN, 1: MOVE, 2: UP, 3: CANCEL
@@ -37,12 +40,16 @@ sealed class ControlPacket {
     ) : ControlPacket()
 
     companion object {
+        const val TYPE_PING: Byte = 0x01
         const val TYPE_TOUCH: Byte = 0x10
         const val TYPE_KEY: Byte = 0x11
         const val TYPE_TEXT: Byte = 0x12
 
         fun write(out: DataOutputStream, packet: ControlPacket) {
             when (packet) {
+                is Ping -> {
+                    out.writeByte(TYPE_PING.toInt())
+                }
                 is Touch -> {
                     out.writeByte(TYPE_TOUCH.toInt())
                     out.writeInt(packet.action)
@@ -65,26 +72,37 @@ sealed class ControlPacket {
         }
 
         fun read(input: DataInputStream): ControlPacket? {
-            val type = input.readByte()
-            return when (type) {
-                TYPE_TOUCH -> {
-                    val action = input.readInt()
-                    val pointerId = input.readInt()
-                    val normX = input.readFloat()
-                    val normY = input.readFloat()
-                    Touch(action, pointerId, normX, normY)
+            return try {
+                val type = input.readByte()
+                when (type) {
+                    TYPE_PING -> Ping
+                    TYPE_TOUCH -> {
+                        val action = input.readInt()
+                        val pointerId = input.readInt()
+                        val normX = input.readFloat()
+                        val normY = input.readFloat()
+                        Touch(action, pointerId, normX, normY)
+                    }
+                    TYPE_KEY -> {
+                        val keyCode = input.readInt()
+                        Key(keyCode)
+                    }
+                    TYPE_TEXT -> {
+                        val length = input.readInt()
+                        if (length in 1..65536) {
+                            val bytes = ByteArray(length)
+                            input.readFully(bytes)
+                            Text(String(bytes, Charsets.UTF_8))
+                        } else {
+                            Ping
+                        }
+                    }
+                    else -> Ping // Return Ping for unknown type to keep connection alive
                 }
-                TYPE_KEY -> {
-                    val keyCode = input.readInt()
-                    Key(keyCode)
-                }
-                TYPE_TEXT -> {
-                    val length = input.readInt()
-                    val bytes = ByteArray(length)
-                    input.readFully(bytes)
-                    Text(String(bytes, Charsets.UTF_8))
-                }
-                else -> null
+            } catch (_: EOFException) {
+                null
+            } catch (_: Exception) {
+                null
             }
         }
     }

@@ -2,6 +2,7 @@ package com.wizzwuz.mirrorit.model
 
 import java.io.DataInputStream
 import java.io.DataOutputStream
+import java.io.EOFException
 
 data class FrameHeader(
     val type: Byte,
@@ -26,15 +27,25 @@ data class FrameHeader(
         }
 
         fun read(input: DataInputStream): FrameHeader? {
-            val b1 = input.readByte()
-            val b2 = input.readByte()
-            if (b1 != MAGIC_BYTE_1 || b2 != MAGIC_BYTE_2) {
+            try {
+                // Seek for MAGIC_BYTE_1 to allow stream resynchronization
+                var b1 = input.readByte()
+                while (b1 != MAGIC_BYTE_1) {
+                    b1 = input.readByte()
+                }
+                val b2 = input.readByte()
+                if (b2 != MAGIC_BYTE_2) {
+                    return null
+                }
+                val type = input.readByte()
+                val timestampUs = input.readLong()
+                val length = input.readInt()
+                return FrameHeader(type, timestampUs, length)
+            } catch (_: EOFException) {
+                return null
+            } catch (_: Exception) {
                 return null
             }
-            val type = input.readByte()
-            val timestampUs = input.readLong()
-            val length = input.readInt()
-            return FrameHeader(type, timestampUs, length)
         }
     }
 }

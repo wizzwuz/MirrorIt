@@ -15,7 +15,6 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
-import java.net.InetAddress
 import java.net.InetSocketAddress
 
 object DiscoveryBeacon {
@@ -55,9 +54,13 @@ object DiscoveryBeacon {
                             put("shizuku", hasShizuku)
                         }
                         val data = json.toString().toByteArray(Charsets.UTF_8)
-                        val broadcastAddr = NetworkUtils.getBroadcastAddress()
-                        val packet = DatagramPacket(data, data.size, broadcastAddr, DISCOVERY_PORT)
-                        socket.send(packet)
+                        val broadcastAddresses = NetworkUtils.getAllBroadcastAddresses()
+                        for (broadcastAddr in broadcastAddresses) {
+                            try {
+                                val packet = DatagramPacket(data, data.size, broadcastAddr, DISCOVERY_PORT)
+                                socket.send(packet)
+                            } catch (_: Exception) {}
+                        }
                     } catch (e: Exception) {
                         Log.w(TAG, "Beacon send error: ${e.message}")
                     }
@@ -93,7 +96,7 @@ object DiscoveryBeacon {
                         delay(3000)
                         val now = System.currentTimeMillis()
                         _discoveredDevices.value = _discoveredDevices.value.filter {
-                            now - it.lastSeenTimestamp < 5000
+                            now - it.lastSeenTimestamp < 6000
                         }
                     }
                 }
@@ -107,9 +110,18 @@ object DiscoveryBeacon {
                         val message = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
                         val json = JSONObject(message)
 
+                        // Priority: use the packet's sender IP as it is the proven routable IP across this network
+                        val packetSenderIp = packet.address?.hostAddress
+                        val resolvedIp = if (!packetSenderIp.isNullOrBlank() && packetSenderIp != "0.0.0.0" && packetSenderIp != "127.0.0.1") {
+                            packetSenderIp
+                        } else {
+                            val jsonIp = json.optString("ip", "")
+                            if (jsonIp.isNotBlank() && jsonIp != "127.0.0.1") jsonIp else "192.168.43.1"
+                        }
+
                         val device = DeviceInfo(
-                            deviceName = json.optString("name", "Unknown Host"),
-                            ipAddress = json.optString("ip", packet.address.hostAddress ?: ""),
+                            deviceName = json.optString("name", "Android Device"),
+                            ipAddress = resolvedIp,
                             port = json.optInt("port", 45556),
                             screenWidth = json.optInt("width", 1080),
                             screenHeight = json.optInt("height", 1920),

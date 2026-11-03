@@ -34,6 +34,13 @@ class HostServer(
     private var dataOutputStream: DataOutputStream? = null
     private var dataInputStream: DataInputStream? = null
     private var serverJob: Job? = null
+    private var clientReaderJob: Job? = null
+
+    var onClientConnectedListener: (() -> Unit)? = null
+
+    // Cache latest SPS/PPS config frame so newly connected clients can decode immediately
+    @Volatile
+    private var cachedConfigData: ByteArray? = null
 
     private val _isClientConnected = MutableStateFlow(false)
     val isClientConnected: StateFlow<Boolean> = _isClientConnected.asStateFlow()
@@ -60,29 +67,50 @@ class HostServer(
                 while (isActive) {
                     try {
                         val socket = serverSocket?.accept() ?: break
+                        socket.tcpNoDelay = true
                         Log.i(TAG, "Client connected from ${socket.remoteSocketAddress}")
 
                         synchronized(this@HostServer) {
-                            clientSocket?.close()
+                            try {
+                                clientSocket?.close()
+                            } catch (_: Exception) {}
+
                             clientSocket = socket
-                            dataOutputStream = DataOutputStream(BufferedOutputStream(socket.getOutputStream(), 64 * 1024))
+                            dataOutputStream = DataOutputStream(BufferedOutputStream(socket.getOutputStream(), 128 * 1024))
                             dataInputStream = DataInputStream(socket.getInputStream())
                             _isClientConnected.value = true
                             _connectedClientIp.value = socket.inetAddress.hostAddress
+
+                            // Immediately send cached SPS/PPS codec configuration if available
+                            val config = cachedConfigData
+                            if (config != null) {
+                                try {
+                                    FrameHeader.write(dataOutputStream!!, FrameHeader.TYPE_CONFIG, 0L, config.size)
+                                    dataOutputStream!!.write(config)
+                                    dataOutputStream!!.flush()
+                                } catch (e: Exception) {
+                                    Log.w(TAG, "Failed to send initial SPS/PPS config to client: ${e.message}")
+                                }
+                            }
                         }
 
-                        // Read incoming control packets
-                        readControlPackets(socket)
+                        // Notify listener to request an immediate keyframe from MediaCodec
+                        onClientConnectedListener?.invoke()
+
+                        // Spawn client reader coroutine so accept loop continues listening
+                        clientReaderJob?.cancel()
+                        clientReaderJob = launch(Dispatchers.IO) {
+                            readControlPackets(socket)
+                        }
+
                     } catch (e: SocketException) {
                         if (!isActive) break
                     } catch (e: Exception) {
-                        Log.e(TAG, "Exception handling client connection", e)
-                    } finally {
-                        onClientDisconnected()
+                        Log.e(TAG, "Exception in client accept loop", e)
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Server socket error", e)
+                Log.e(TAG, "Server socket error on port $port", e)
             }
         }
     }
@@ -90,22 +118,27 @@ class HostServer(
     private fun readControlPackets(socket: Socket) {
         val input = dataInputStream ?: return
         try {
-            while (!socket.isClosed && socket.isConnected) {
-                val packet = ControlPacket.read(input) ?: break
-                handleControlPacket(packet)
+            while (!socket.isClosed && socket.isConnected && isActive) {
+                val packet = ControlPacket.read(input)
+                if (packet == null) {
+                    // Stream closed
+                    break
+                }
+                when (packet) {
+                    is ControlPacket.Ping -> {
+                        // Keep-alive heartbeat, no-op
+                    }
+                    is ControlPacket.Touch -> handleTouchEvent(packet)
+                    is ControlPacket.Key -> handleKeyEvent(packet)
+                    is ControlPacket.Text -> handleTextEvent(packet)
+                }
             }
         } catch (_: EOFException) {
-            // Client closed stream normally
+            Log.i(TAG, "Client disconnected normally")
         } catch (e: Exception) {
             Log.w(TAG, "Control packet read ended: ${e.message}")
-        }
-    }
-
-    private fun handleControlPacket(packet: ControlPacket) {
-        when (packet) {
-            is ControlPacket.Touch -> handleTouchEvent(packet)
-            is ControlPacket.Key -> handleKeyEvent(packet)
-            is ControlPacket.Text -> handleTextEvent(packet)
+        } finally {
+            onClientDisconnected()
         }
     }
 
@@ -130,7 +163,7 @@ class HostServer(
                 val dy = abs(lastY - downY)
                 val elapsed = (System.currentTimeMillis() - downTimeMs).coerceAtLeast(50)
 
-                val isTap = dx < 20 && dy < 20 && elapsed < 400
+                val isTap = dx < 25 && dy < 25 && elapsed < 400
                 if (ShizukuManager.isGranted()) {
                     if (isTap) {
                         ShizukuManager.injectTap(downX.toInt(), downY.toInt())
@@ -140,7 +173,7 @@ class HostServer(
                             downY.toInt(),
                             lastX.toInt(),
                             lastY.toInt(),
-                            elapsed.toInt().coerceIn(100, 1000)
+                            elapsed.toInt().coerceIn(100, 800)
                         )
                     }
                 } else if (MirrorAccessibilityService.isRunning) {
@@ -173,6 +206,13 @@ class HostServer(
     }
 
     fun sendVideoFrame(type: Byte, timestampUs: Long, data: ByteArray, offset: Int, length: Int) {
+        // Cache SPS/PPS configuration frame
+        if (type == FrameHeader.TYPE_CONFIG) {
+            val copy = ByteArray(length)
+            System.arraycopy(data, offset, copy, 0, length)
+            cachedConfigData = copy
+        }
+
         synchronized(this) {
             val out = dataOutputStream ?: return
             try {
@@ -206,6 +246,8 @@ class HostServer(
     }
 
     fun stop() {
+        clientReaderJob?.cancel()
+        clientReaderJob = null
         serverJob?.cancel()
         serverJob = null
         onClientDisconnected()

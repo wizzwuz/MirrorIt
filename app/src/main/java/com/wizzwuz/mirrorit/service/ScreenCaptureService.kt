@@ -134,6 +134,14 @@ class ScreenCaptureService : Service() {
             hostScreenWidth = screenWidth,
             hostScreenHeight = screenHeight
         )
+        server.onClientConnectedListener = {
+            try {
+                val params = android.os.Bundle().apply {
+                    putInt(MediaCodec.PARAMETER_KEY_REQUEST_SYNC_FRAME, 0)
+                }
+                encoder?.setParameters(params)
+            } catch (_: Exception) {}
+        }
         server.start()
         hostServer = server
 
@@ -163,7 +171,9 @@ class ScreenCaptureService : Service() {
                 // Low latency flags
                 setInteger(MediaFormat.KEY_BITRATE_MODE, MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR)
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    try {
+                        setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    } catch (_: Exception) {}
                 }
             }
 

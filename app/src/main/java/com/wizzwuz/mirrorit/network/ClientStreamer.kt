@@ -1,7 +1,9 @@
 package com.wizzwuz.mirrorit.network
 
 import android.media.MediaCodec
+import android.media.MediaCodecInfo
 import android.media.MediaFormat
+import android.os.Build
 import android.util.Log
 import android.view.Surface
 import com.wizzwuz.mirrorit.model.ControlPacket
@@ -9,6 +11,7 @@ import com.wizzwuz.mirrorit.model.FrameHeader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -49,6 +52,10 @@ class ClientStreamer(
     private var dataOutputStream: DataOutputStream? = null
     private var decoder: MediaCodec? = null
     private var streamJob: Job? = null
+    private var heartbeatJob: Job? = null
+
+    @Volatile
+    private var isDecoderReady = false
 
     fun start() {
         stop()
@@ -57,26 +64,52 @@ class ClientStreamer(
             try {
                 val s = Socket()
                 s.tcpNoDelay = true
-                s.connect(InetSocketAddress(hostIp, hostPort), 5000)
+
+                // Attempt connection to the resolved target IP
+                var targetIp = hostIp.trim()
+                if (targetIp.isBlank() || targetIp == "127.0.0.1" || targetIp == "0.0.0.0") {
+                    targetIp = "192.168.43.1"
+                }
+
+                Log.i(TAG, "Connecting to host $targetIp:$hostPort...")
+                s.connect(InetSocketAddress(targetIp, hostPort), 7000)
                 socket = s
                 dataInputStream = DataInputStream(BufferedInputStream(s.getInputStream(), 128 * 1024))
                 dataOutputStream = DataOutputStream(s.getOutputStream())
 
-                initDecoder()
+                // Send initial ping to confirm two-way communication
+                ControlPacket.write(dataOutputStream!!, ControlPacket.Ping)
+
+                // Start decoder with fallback dimensions
+                initDecoder(1280, 720, null)
+
                 _status.value = ConnectionStatus.STREAMING
-                Log.i(TAG, "Connected to host $hostIp:$hostPort, decoding started")
+                Log.i(TAG, "Connected to host $targetIp:$hostPort, stream loop active")
+
+                // Start heartbeat coroutine to keep socket alive
+                heartbeatJob = launch(Dispatchers.IO) {
+                    while (isActive && !s.isClosed) {
+                        delay(2000)
+                        synchronized(this@ClientStreamer) {
+                            try {
+                                dataOutputStream?.let { out ->
+                                    ControlPacket.write(out, ControlPacket.Ping)
+                                }
+                            } catch (_: Exception) {}
+                        }
+                    }
+                }
 
                 var frameCounter = 0
                 var lastFpsTime = System.currentTimeMillis()
-
                 val buffer = ByteArray(512 * 1024)
 
                 while (isActive && !s.isClosed) {
                     val header = FrameHeader.read(dataInputStream!!) ?: break
                     val payloadLen = header.payloadLength
                     if (payloadLen <= 0 || payloadLen > buffer.size) {
-                        Log.w(TAG, "Invalid payload length: $payloadLen")
-                        break
+                        Log.w(TAG, "Skipping invalid payload length: $payloadLen")
+                        continue
                     }
 
                     dataInputStream!!.readFully(buffer, 0, payloadLen)
@@ -84,10 +117,17 @@ class ClientStreamer(
                     val now = System.currentTimeMillis()
                     val frameTimeMs = header.timestampUs / 1000
                     if (frameTimeMs > 0 && now >= frameTimeMs) {
-                        _latencyMs.value = now - frameTimeMs
+                        _latencyMs.value = (now - frameTimeMs).coerceIn(1, 999)
                     }
 
-                    feedDecoder(header.type, header.timestampUs, buffer, payloadLen)
+                    if (header.type == FrameHeader.TYPE_CONFIG) {
+                        // Received SPS/PPS from Host; reconfigure decoder with exact codec parameters
+                        val csd = ByteArray(payloadLen)
+                        System.arraycopy(buffer, 0, csd, 0, payloadLen)
+                        initDecoder(1280, 720, csd)
+                    } else {
+                        feedDecoder(header.type, header.timestampUs, buffer, payloadLen)
+                    }
 
                     frameCounter++
                     if (now - lastFpsTime >= 1000) {
@@ -97,7 +137,7 @@ class ClientStreamer(
                     }
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Streamer exception", e)
+                Log.e(TAG, "Streamer connection exception: ${e.message}", e)
                 _status.value = ConnectionStatus.ERROR
             } finally {
                 cleanup()
@@ -105,19 +145,49 @@ class ClientStreamer(
         }
     }
 
-    private fun initDecoder() {
-        val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, 1280, 720).apply {
-            setInteger(MediaFormat.KEY_COLOR_FORMAT, android.media.MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
-            setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+    private fun initDecoder(width: Int, height: Int, csd0: ByteArray?) {
+        try {
+            decoder?.stop()
+            decoder?.release()
+        } catch (_: Exception) {}
+        decoder = null
+        isDecoderReady = false
+
+        try {
+            if (!surface.isValid) {
+                Log.w(TAG, "Surface is not valid for decoder configuration")
+                return
+            }
+
+            val format = MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, width, height).apply {
+                setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
+                if (csd0 != null) {
+                    setByteBuffer("csd-0", ByteBuffer.wrap(csd0))
+                }
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                    try {
+                        setInteger(MediaFormat.KEY_LOW_LATENCY, 1)
+                    } catch (_: Exception) {}
+                }
+            }
+
+            val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
+            codec.configure(format, surface, null, 0)
+            codec.start()
+            decoder = codec
+            isDecoderReady = true
+            Log.i(TAG, "MediaCodec decoder successfully initialized (${width}x${height}, csd-0: ${csd0 != null})")
+        } catch (e: Exception) {
+            Log.e(TAG, "Decoder init error: ${e.message}", e)
         }
-        val codec = MediaCodec.createDecoderByType(MediaFormat.MIMETYPE_VIDEO_AVC)
-        codec.configure(format, surface, null, 0)
-        codec.start()
-        decoder = codec
     }
 
     private fun feedDecoder(type: Byte, timestampUs: Long, data: ByteArray, length: Int) {
+        if (!isDecoderReady) {
+            initDecoder(1280, 720, null)
+        }
         val codec = decoder ?: return
+
         try {
             val inIndex = codec.dequeueInputBuffer(10_000)
             if (inIndex >= 0) {
@@ -140,7 +210,7 @@ class ClientStreamer(
                 outIndex = codec.dequeueOutputBuffer(bufferInfo, 0)
             }
         } catch (e: Exception) {
-            Log.w(TAG, "Decoder feed error: ${e.message}")
+            Log.w(TAG, "Decoder feed warning: ${e.message}")
         }
     }
 
@@ -184,11 +254,15 @@ class ClientStreamer(
     }
 
     private fun cleanup() {
+        heartbeatJob?.cancel()
+        heartbeatJob = null
+
         try {
             decoder?.stop()
             decoder?.release()
         } catch (_: Exception) {}
         decoder = null
+        isDecoderReady = false
 
         try {
             dataInputStream?.close()
