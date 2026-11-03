@@ -118,7 +118,7 @@ class HostServer(
     private fun readControlPackets(socket: Socket) {
         val input = dataInputStream ?: return
         try {
-            while (!socket.isClosed && socket.isConnected && isActive) {
+            while (!socket.isClosed && socket.isConnected) {
                 val packet = ControlPacket.read(input)
                 if (packet == null) {
                     // Stream closed
