@@ -54,7 +54,7 @@ class MainActivity : ComponentActivity() {
         ShizukuManager.init()
 
         // Start local discovery listener
-        DiscoveryBeacon.startListening()
+        DiscoveryBeacon.startListening(this)
 
         // Check notification permission for Android 13+
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {

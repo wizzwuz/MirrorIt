@@ -3,6 +3,7 @@ package com.wizzwuz.mirrorit.network
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.wifi.WifiManager
 import java.net.Inet4Address
 import java.net.InetAddress
 import java.net.NetworkInterface
@@ -31,6 +32,7 @@ object NetworkUtils {
                                    intf.name.startsWith("softap") ||
                                    intf.name.startsWith("rndis") ||
                                    intf.name.startsWith("swlan") ||
+                                   intf.name.startsWith("wlan1") ||
                                    hostAddr == "192.168.43.1"
                         val displayName = when {
                             isAp -> "Mobile Hotspot (${intf.name})"
@@ -61,6 +63,34 @@ object NetworkUtils {
             ?: list.firstOrNull { it.name.startsWith("wlan") }?.ipAddress
             ?: list.firstOrNull()?.ipAddress
             ?: "192.168.43.1"
+    }
+
+    fun getGatewayIp(context: Context): String? {
+        try {
+            val wifiManager = context.applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            val dhcpInfo = wifiManager?.dhcpInfo ?: return null
+            val gatewayInt = dhcpInfo.gateway
+            if (gatewayInt != 0) {
+                return String.format(
+                    "%d.%d.%d.%d",
+                    gatewayInt and 0xff,
+                    gatewayInt shr 8 and 0xff,
+                    gatewayInt shr 16 and 0xff,
+                    gatewayInt shr 24 and 0xff
+                )
+            }
+        } catch (_: Exception) {}
+        return null
+    }
+
+    fun isHotspotActive(context: Context): Boolean {
+        val list = getLocalIpAddresses(context)
+        return list.any { it.isHotspot }
+    }
+
+    fun isConnectedToHotspot(context: Context): Boolean {
+        val gateway = getGatewayIp(context)
+        return gateway == "192.168.43.1"
     }
 
     fun getAllBroadcastAddresses(): List<InetAddress> {

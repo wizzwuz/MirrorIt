@@ -1,5 +1,6 @@
 package com.wizzwuz.mirrorit.network
 
+import android.content.Context
 import android.os.Build
 import android.util.Log
 import com.wizzwuz.mirrorit.model.DeviceInfo
@@ -15,7 +16,9 @@ import kotlinx.coroutines.launch
 import org.json.JSONObject
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.InetAddress
 import java.net.InetSocketAddress
+import java.net.Socket
 
 object DiscoveryBeacon {
     private const val TAG = "DiscoveryBeacon"
@@ -23,6 +26,7 @@ object DiscoveryBeacon {
 
     private var broadcastJob: Job? = null
     private var listenerJob: Job? = null
+    private var probeJob: Job? = null
 
     private val _discoveredDevices = MutableStateFlow<List<DeviceInfo>>(emptyList())
     val discoveredDevices: StateFlow<List<DeviceInfo>> = _discoveredDevices.asStateFlow()
@@ -61,6 +65,14 @@ object DiscoveryBeacon {
                                 socket.send(packet)
                             } catch (_: Exception) {}
                         }
+
+                        // Also send direct unicast to 192.168.43.1 in case the controller is the hotspot
+                        try {
+                            val hotspotGateway = InetAddress.getByName("192.168.43.1")
+                            val unicastPacket = DatagramPacket(data, data.size, hotspotGateway, DISCOVERY_PORT)
+                            socket.send(unicastPacket)
+                        } catch (_: Exception) {}
+
                     } catch (e: Exception) {
                         Log.w(TAG, "Beacon send error: ${e.message}")
                     }
@@ -79,7 +91,7 @@ object DiscoveryBeacon {
         broadcastJob = null
     }
 
-    fun startListening() {
+    fun startListening(context: Context) {
         if (listenerJob != null && listenerJob?.isActive == true) return
         listenerJob = CoroutineScope(Dispatchers.IO).launch {
             var socket: DatagramSocket? = null
@@ -96,7 +108,7 @@ object DiscoveryBeacon {
                         delay(3000)
                         val now = System.currentTimeMillis()
                         _discoveredDevices.value = _discoveredDevices.value.filter {
-                            now - it.lastSeenTimestamp < 6000
+                            now - it.lastSeenTimestamp < 7000
                         }
                     }
                 }
@@ -130,14 +142,7 @@ object DiscoveryBeacon {
                             lastSeenTimestamp = System.currentTimeMillis()
                         )
 
-                        val current = _discoveredDevices.value.toMutableList()
-                        val index = current.indexOfFirst { it.ipAddress == device.ipAddress && it.port == device.port }
-                        if (index >= 0) {
-                            current[index] = device
-                        } else {
-                            current.add(device)
-                        }
-                        _discoveredDevices.value = current
+                        addOrUpdateDevice(device)
                     } catch (e: Exception) {
                         if (!isActive) break
                     }
@@ -148,9 +153,58 @@ object DiscoveryBeacon {
                 socket?.close()
             }
         }
+
+        // Active TCP probe for Hotspot Host (bypasses Android Tethering UDP broadcast blocking)
+        probeJob?.cancel()
+        probeJob = CoroutineScope(Dispatchers.IO).launch {
+            while (isActive) {
+                val targets = mutableListOf<String>()
+                val gateway = NetworkUtils.getGatewayIp(context)
+                if (!gateway.isNullOrBlank() && gateway != "0.0.0.0") {
+                    targets.add(gateway)
+                }
+                targets.add("192.168.43.1")
+
+                for (target in targets.distinct()) {
+                    try {
+                        val testSocket = Socket()
+                        testSocket.connect(InetSocketAddress(target, 45556), 600)
+                        testSocket.close()
+
+                        val device = DeviceInfo(
+                            deviceName = if (target == "192.168.43.1") "Hotspot Host (192.168.43.1)" else "Host Device ($target)",
+                            ipAddress = target,
+                            port = 45556,
+                            screenWidth = 1080,
+                            screenHeight = 1920,
+                            osVersion = "Direct Hotspot",
+                            hasShizuku = true,
+                            lastSeenTimestamp = System.currentTimeMillis()
+                        )
+                        addOrUpdateDevice(device)
+                    } catch (_: Exception) {
+                        // Target host not running or not reachable yet
+                    }
+                }
+                delay(2500)
+            }
+        }
+    }
+
+    private fun addOrUpdateDevice(device: DeviceInfo) {
+        val current = _discoveredDevices.value.toMutableList()
+        val index = current.indexOfFirst { it.ipAddress == device.ipAddress && it.port == device.port }
+        if (index >= 0) {
+            current[index] = device
+        } else {
+            current.add(device)
+        }
+        _discoveredDevices.value = current
     }
 
     fun stopListening() {
+        probeJob?.cancel()
+        probeJob = null
         listenerJob?.cancel()
         listenerJob = null
         _discoveredDevices.value = emptyList()

@@ -206,7 +206,7 @@ fun HostScreen(
                 .fillMaxWidth()
                 .clip(RoundedCornerShape(16.dp))
                 .background(DarkSurfaceVariant.copy(alpha = 0.5f))
-                .border(1.dp, DarkBorder, RoundedCornerShape(16.dp))
+                .border(1.dp, NeonCyan.copy(alpha = 0.4f), RoundedCornerShape(16.dp))
                 .padding(16.dp)
         ) {
             Row(
@@ -220,7 +220,7 @@ fun HostScreen(
                     modifier = Modifier.size(20.dp)
                 )
                 Text(
-                    text = "Zero-Router Direct Hotspot",
+                    text = "Direct Hotspot Mode (Zero Router)",
                     fontWeight = FontWeight.SemiBold,
                     color = TextPrimary,
                     fontSize = 14.sp
@@ -228,7 +228,7 @@ fun HostScreen(
             }
             Spacer(modifier = Modifier.height(6.dp))
             Text(
-                text = "No Wi-Fi router needed! Turn on Mobile Hotspot on either phone and connect the other phone to it. Devices will discover each other automatically via UDP beacon on port 45555.",
+                text = "Turn ON Mobile Hotspot on this phone, connect the other phone to this Hotspot's Wi-Fi, and tap 'Connect to Hotspot Host (192.168.43.1)' on that phone. No router or internet data is needed!",
                 color = TextSecondary,
                 fontSize = 12.sp,
                 lineHeight = 17.sp

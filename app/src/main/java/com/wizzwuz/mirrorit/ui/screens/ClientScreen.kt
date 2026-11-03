@@ -38,6 +38,79 @@ fun ClientScreen(
             .padding(16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp)
     ) {
+        // Direct Hotspot One-Tap Connect Card
+        item {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(18.dp))
+                    .background(DarkSurfaceVariant)
+                    .border(1.dp, NeonCyan.copy(alpha = 0.6f), RoundedCornerShape(18.dp))
+                    .padding(16.dp)
+            ) {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .size(40.dp)
+                                .clip(CircleShape)
+                                .background(NeonCyan.copy(alpha = 0.2f)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Icon(
+                                imageVector = Icons.Default.WifiTethering,
+                                contentDescription = null,
+                                tint = NeonCyan,
+                                modifier = Modifier.size(24.dp)
+                            )
+                        }
+                        Column {
+                            Text(
+                                text = "Direct Hotspot Connection",
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold,
+                                color = TextPrimary
+                            )
+                            Text(
+                                text = "Connect 1 phone to the other phone's Hotspot (no router/data needed)",
+                                fontSize = 11.sp,
+                                color = TextSecondary
+                            )
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(2.dp))
+
+                    Button(
+                        onClick = { onConnectToDevice("192.168.43.1", 45556) },
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = NeonCyan,
+                            contentColor = Color.Black
+                        ),
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.TouchApp,
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp)
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "Connect to Hotspot Host (192.168.43.1)",
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp
+                        )
+                    }
+                }
+            }
+        }
+
         // Discovered Devices Header
         item {
             Row(
@@ -70,7 +143,7 @@ fun ClientScreen(
                         .padding(horizontal = 8.dp, vertical = 4.dp)
                 ) {
                     Text(
-                        text = "${discoveredDevices.size} nearby",
+                        text = "${discoveredDevices.size} detected",
                         color = TextSecondary,
                         fontSize = 11.sp
                     )
@@ -97,12 +170,12 @@ fun ClientScreen(
                         )
                         Spacer(modifier = Modifier.height(12.dp))
                         Text(
-                            text = "Scanning local Wi-Fi & Hotspot network...",
+                            text = "Scanning Hotspot & Local network...",
                             color = TextSecondary,
                             fontSize = 13.sp
                         )
                         Text(
-                            text = "Make sure the other phone has MirrorIt open in 'Share Screen' mode.",
+                            text = "Turn on Hotspot on one phone, connect Wi-Fi on the other, and start sharing.",
                             color = TextMuted,
                             fontSize = 11.sp,
                             modifier = Modifier.padding(top = 4.dp)
@@ -140,7 +213,7 @@ fun ClientScreen(
                         modifier = Modifier.size(20.dp)
                     )
                     Text(
-                        text = "Direct Connect",
+                        text = "Direct Connect by IP",
                         style = MaterialTheme.typography.titleMedium,
                         fontWeight = FontWeight.Bold,
                         color = TextPrimary
@@ -152,7 +225,7 @@ fun ClientScreen(
                 OutlinedTextField(
                     value = manualIp,
                     onValueChange = { manualIp = it },
-                    label = { Text("Host IP Address (e.g. 192.168.1.5)") },
+                    label = { Text("Host IP Address (e.g. 192.168.43.1)") },
                     singleLine = true,
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = NeonCyan,
@@ -162,32 +235,6 @@ fun ClientScreen(
                     ),
                     modifier = Modifier.fillMaxWidth()
                 )
-
-                Spacer(modifier = Modifier.height(8.dp))
-
-                // Hotspot quick-fill button
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp)
-                ) {
-                    Button(
-                        onClick = { manualIp = "192.168.43.1" },
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = DarkSurfaceVariant,
-                            contentColor = NeonCyan
-                        ),
-                        shape = RoundedCornerShape(8.dp),
-                        modifier = Modifier.weight(1f)
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.WifiTethering,
-                            contentDescription = null,
-                            modifier = Modifier.size(16.dp)
-                        )
-                        Spacer(modifier = Modifier.width(6.dp))
-                        Text("Host Hotspot (192.168.43.1)", fontSize = 11.sp)
-                    }
-                }
 
                 Spacer(modifier = Modifier.height(12.dp))
 
@@ -240,7 +287,7 @@ fun ClientScreen(
                         modifier = Modifier.size(18.dp)
                     )
                     Text(
-                        text = "Hotspot Pairing Guide",
+                        text = "Device-to-Device Hotspot Steps",
                         color = TextPrimary,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp
@@ -248,9 +295,11 @@ fun ClientScreen(
                 }
                 Spacer(modifier = Modifier.height(6.dp))
                 Text(
-                    text = "• Scenario A (Host is Hotspot): Turn on Hotspot on the host phone. Connect this controller phone to its Wi-Fi. Tap 'Host Hotspot (192.168.43.1)' and connect.\n" +
-                           "• Scenario B (Controller is Hotspot): Turn on Hotspot on this controller phone. Connect the host phone to it. Discovered host will automatically appear in the list above.\n" +
-                           "• Scenario C (Same Wi-Fi Router): Both phones connected to the same Wi-Fi router. Automatic zero-config discovery works seamlessly.",
+                    text = "1. Turn ON Mobile Hotspot on Device A.\n" +
+                           "2. Connect Device B to Device A's Wi-Fi.\n" +
+                           "3. On Device A (Host): Tap 'Start Screen Sharing'.\n" +
+                           "4. On Device B (Controller): Tap 'Connect to Hotspot Host (192.168.43.1)' above.\n\n" +
+                           "No external Wi-Fi router or cellular data is used!",
                     color = TextSecondary,
                     fontSize = 11.sp,
                     lineHeight = 16.sp
