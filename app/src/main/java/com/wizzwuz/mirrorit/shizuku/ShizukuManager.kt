@@ -107,7 +107,14 @@ object ShizukuManager {
         if (isShellInitialized.get()) return
         CoroutineScope(Dispatchers.IO).launch {
             try {
-                val proc = Shizuku.newProcess(arrayOf("sh"), null, null)
+                val method = Shizuku::class.java.getDeclaredMethod(
+                    "newProcess",
+                    Array<String>::class.java,
+                    Array<String>::class.java,
+                    String::class.java
+                )
+                method.isAccessible = true
+                val proc = method.invoke(null, arrayOf("sh"), null, null) as Process
                 shellProcess = proc
                 shellWriter = BufferedWriter(OutputStreamWriter(proc.outputStream))
                 isShellInitialized.set(true)
