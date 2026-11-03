@@ -32,6 +32,9 @@ fun ClientScreen(
     var manualIp by remember { mutableStateOf("") }
     var manualPort by remember { mutableStateOf("45556") }
 
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val hotspotHostIp = remember { NetworkUtils.getGatewayIp(context) ?: "192.168.43.1" }
+
     LazyColumn(
         modifier = modifier
             .fillMaxSize()
@@ -85,7 +88,7 @@ fun ClientScreen(
                     Spacer(modifier = Modifier.height(2.dp))
 
                     Button(
-                        onClick = { onConnectToDevice("192.168.43.1", 45556) },
+                        onClick = { onConnectToDevice(hotspotHostIp, 45556) },
                         colors = ButtonDefaults.buttonColors(
                             containerColor = NeonCyan,
                             contentColor = Color.Black
@@ -102,7 +105,7 @@ fun ClientScreen(
                         )
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
-                            text = "Connect to Hotspot Host (192.168.43.1)",
+                            text = "Connect to Hotspot Host ($hotspotHostIp)",
                             fontWeight = FontWeight.Bold,
                             fontSize = 13.sp
                         )

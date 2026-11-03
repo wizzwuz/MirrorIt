@@ -57,22 +57,44 @@ class ClientStreamer(
     @Volatile
     private var isDecoderReady = false
 
+    private var hostWidth = 1080
+    private var hostHeight = 1920
+
     fun start() {
         stop()
         _status.value = ConnectionStatus.CONNECTING
         streamJob = CoroutineScope(Dispatchers.IO).launch {
             try {
-                val s = Socket()
-                s.tcpNoDelay = true
-
-                // Attempt connection to the resolved target IP
+                // Resolve target IP
                 var targetIp = hostIp.trim()
                 if (targetIp.isBlank() || targetIp == "127.0.0.1" || targetIp == "0.0.0.0") {
                     targetIp = "192.168.43.1"
                 }
 
-                Log.i(TAG, "Connecting to host $targetIp:$hostPort...")
-                s.connect(InetSocketAddress(targetIp, hostPort), 7000)
+                // Connect with up to 3 fast retries (useful if host is just launching)
+                var connectedSocket: Socket? = null
+                var lastEx: Exception? = null
+                val maxRetries = 3
+
+                for (attempt in 1..maxRetries) {
+                    if (!isActive) break
+                    try {
+                        Log.i(TAG, "Connecting to host $targetIp:$hostPort (attempt $attempt/$maxRetries)...")
+                        val s = Socket()
+                        s.tcpNoDelay = true
+                        s.connect(InetSocketAddress(targetIp, hostPort), 3500)
+                        connectedSocket = s
+                        break
+                    } catch (e: Exception) {
+                        lastEx = e
+                        Log.w(TAG, "Connection attempt $attempt failed: ${e.message}")
+                        if (attempt < maxRetries && isActive) {
+                            delay(700)
+                        }
+                    }
+                }
+
+                val s = connectedSocket ?: throw (lastEx ?: java.net.ConnectException("Failed to connect to $targetIp:$hostPort"))
                 socket = s
                 dataInputStream = DataInputStream(BufferedInputStream(s.getInputStream(), 128 * 1024))
                 dataOutputStream = DataOutputStream(s.getOutputStream())
@@ -80,8 +102,8 @@ class ClientStreamer(
                 // Send initial ping to confirm two-way communication
                 ControlPacket.write(dataOutputStream!!, ControlPacket.Ping)
 
-                // Start decoder with fallback dimensions
-                initDecoder(1280, 720, null)
+                // Start decoder
+                initDecoder(hostWidth, hostHeight, null)
 
                 _status.value = ConnectionStatus.STREAMING
                 Log.i(TAG, "Connected to host $targetIp:$hostPort, stream loop active")
@@ -120,13 +142,24 @@ class ClientStreamer(
                         _latencyMs.value = (now - frameTimeMs).coerceIn(1, 999)
                     }
 
-                    if (header.type == FrameHeader.TYPE_CONFIG) {
-                        // Received SPS/PPS from Host; reconfigure decoder with exact codec parameters
-                        val csd = ByteArray(payloadLen)
-                        System.arraycopy(buffer, 0, csd, 0, payloadLen)
-                        initDecoder(1280, 720, csd)
-                    } else {
-                        feedDecoder(header.type, header.timestampUs, buffer, payloadLen)
+                    when (header.type) {
+                        FrameHeader.TYPE_METADATA -> {
+                            if (payloadLen >= 8) {
+                                val bb = ByteBuffer.wrap(buffer, 0, payloadLen)
+                                hostWidth = bb.int
+                                hostHeight = bb.int
+                                Log.i(TAG, "Host screen metadata received: ${hostWidth}x${hostHeight}")
+                            }
+                        }
+                        FrameHeader.TYPE_CONFIG -> {
+                            // Received SPS/PPS from Host; reconfigure decoder with exact parameters
+                            val csd = ByteArray(payloadLen)
+                            System.arraycopy(buffer, 0, csd, 0, payloadLen)
+                            initDecoder(hostWidth, hostHeight, csd)
+                        }
+                        else -> {
+                            feedDecoder(header.type, header.timestampUs, buffer, payloadLen)
+                        }
                     }
 
                     frameCounter++
@@ -140,6 +173,9 @@ class ClientStreamer(
                 Log.e(TAG, "Streamer connection exception: ${e.message}", e)
                 _status.value = ConnectionStatus.ERROR
             } finally {
+                if (_status.value == ConnectionStatus.STREAMING) {
+                    _status.value = ConnectionStatus.ERROR
+                }
                 cleanup()
             }
         }

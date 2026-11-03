@@ -12,9 +12,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.wizzwuz.mirrorit.network.DiscoveryBeacon
 import com.wizzwuz.mirrorit.network.NetworkUtils
 import com.wizzwuz.mirrorit.service.ScreenCaptureService
 import com.wizzwuz.mirrorit.ui.theme.*
@@ -30,6 +32,16 @@ fun MainTabScreen(
     val isStreaming by ScreenCaptureService.isRunning.collectAsState()
 
     var activeControlTarget by remember { mutableStateOf<Pair<String, Int>?>(null) }
+    val context = LocalContext.current
+
+    DisposableEffect(activeControlTarget) {
+        if (activeControlTarget != null) {
+            DiscoveryBeacon.stopListening()
+        } else {
+            DiscoveryBeacon.startListening(context)
+        }
+        onDispose {}
+    }
 
     if (activeControlTarget != null) {
         val (ip, port) = activeControlTarget!!

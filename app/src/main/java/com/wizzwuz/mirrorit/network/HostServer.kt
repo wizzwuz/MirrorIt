@@ -17,9 +17,11 @@ import java.io.BufferedOutputStream
 import java.io.DataInputStream
 import java.io.DataOutputStream
 import java.io.EOFException
+import java.net.InetSocketAddress
 import java.net.ServerSocket
 import java.net.Socket
 import java.net.SocketException
+import java.nio.ByteBuffer
 import kotlin.math.abs
 
 class HostServer(
@@ -59,8 +61,9 @@ class HostServer(
         stop()
         serverJob = CoroutineScope(Dispatchers.IO).launch {
             try {
-                serverSocket = ServerSocket(port).apply {
+                serverSocket = ServerSocket().apply {
                     reuseAddress = true
+                    bind(InetSocketAddress(port))
                 }
                 Log.i(TAG, "Host server listening on port $port")
 
@@ -80,6 +83,19 @@ class HostServer(
                             dataInputStream = DataInputStream(socket.getInputStream())
                             _isClientConnected.value = true
                             _connectedClientIp.value = socket.inetAddress.hostAddress
+
+                            // Send host screen dimensions metadata
+                            try {
+                                val metaBytes = ByteBuffer.allocate(8).apply {
+                                    putInt(hostScreenWidth)
+                                    putInt(hostScreenHeight)
+                                }.array()
+                                FrameHeader.write(dataOutputStream!!, FrameHeader.TYPE_METADATA, 0L, metaBytes.size)
+                                dataOutputStream!!.write(metaBytes)
+                                dataOutputStream!!.flush()
+                            } catch (e: Exception) {
+                                Log.w(TAG, "Failed to send initial metadata: ${e.message}")
+                            }
 
                             // Immediately send cached SPS/PPS codec configuration if available
                             val config = cachedConfigData
@@ -116,14 +132,10 @@ class HostServer(
     }
 
     private fun readControlPackets(socket: Socket) {
-        val input = dataInputStream ?: return
+        val input = synchronized(this) { dataInputStream } ?: return
         try {
             while (!socket.isClosed && socket.isConnected) {
-                val packet = ControlPacket.read(input)
-                if (packet == null) {
-                    // Stream closed
-                    break
-                }
+                val packet = ControlPacket.read(input) ?: break
                 when (packet) {
                     is ControlPacket.Ping -> {
                         // Keep-alive heartbeat, no-op
@@ -138,7 +150,7 @@ class HostServer(
         } catch (e: Exception) {
             Log.w(TAG, "Control packet read ended: ${e.message}")
         } finally {
-            onClientDisconnected()
+            onClientDisconnected(socket)
         }
     }
 
@@ -214,6 +226,7 @@ class HostServer(
         }
 
         synchronized(this) {
+            val currentSocket = clientSocket ?: return
             val out = dataOutputStream ?: return
             try {
                 FrameHeader.write(out, type, timestampUs, length)
@@ -221,27 +234,29 @@ class HostServer(
                 out.flush()
             } catch (e: Exception) {
                 Log.w(TAG, "Failed to send video frame: ${e.message}")
-                onClientDisconnected()
+                onClientDisconnected(currentSocket)
             }
         }
     }
 
-    private fun onClientDisconnected() {
+    private fun onClientDisconnected(socket: Socket? = null) {
         synchronized(this) {
-            try {
-                dataOutputStream?.close()
-            } catch (_: Exception) {}
-            try {
-                dataInputStream?.close()
-            } catch (_: Exception) {}
-            try {
-                clientSocket?.close()
-            } catch (_: Exception) {}
-            dataOutputStream = null
-            dataInputStream = null
-            clientSocket = null
-            _isClientConnected.value = false
-            _connectedClientIp.value = null
+            if (socket == null || socket === clientSocket) {
+                try {
+                    dataOutputStream?.close()
+                } catch (_: Exception) {}
+                try {
+                    dataInputStream?.close()
+                } catch (_: Exception) {}
+                try {
+                    clientSocket?.close()
+                } catch (_: Exception) {}
+                dataOutputStream = null
+                dataInputStream = null
+                clientSocket = null
+                _isClientConnected.value = false
+                _connectedClientIp.value = null
+            }
         }
     }
 
@@ -250,7 +265,7 @@ class HostServer(
         clientReaderJob = null
         serverJob?.cancel()
         serverJob = null
-        onClientDisconnected()
+        onClientDisconnected(null)
         try {
             serverSocket?.close()
         } catch (_: Exception) {}

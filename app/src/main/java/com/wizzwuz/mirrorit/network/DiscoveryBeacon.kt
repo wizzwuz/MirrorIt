@@ -18,15 +18,14 @@ import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.InetAddress
 import java.net.InetSocketAddress
-import java.net.Socket
 
 object DiscoveryBeacon {
     private const val TAG = "DiscoveryBeacon"
     const val DISCOVERY_PORT = 45555
+    const val DISCOVER_QUERY = "MIRRORIT_DISCOVER"
 
     private var broadcastJob: Job? = null
     private var listenerJob: Job? = null
-    private var probeJob: Job? = null
 
     private val _discoveredDevices = MutableStateFlow<List<DeviceInfo>>(emptyList())
     val discoveredDevices: StateFlow<List<DeviceInfo>> = _discoveredDevices.asStateFlow()
@@ -43,21 +42,23 @@ object DiscoveryBeacon {
         broadcastJob = CoroutineScope(Dispatchers.IO).launch {
             var socket: DatagramSocket? = null
             try {
-                socket = DatagramSocket()
-                socket.broadcast = true
+                socket = DatagramSocket().apply {
+                    broadcast = true
+                }
+
+                val json = JSONObject().apply {
+                    put("name", deviceName)
+                    put("ip", hostIp)
+                    put("port", port)
+                    put("width", width)
+                    put("height", height)
+                    put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
+                    put("shizuku", hasShizuku)
+                }
+                val data = json.toString().toByteArray(Charsets.UTF_8)
 
                 while (isActive) {
                     try {
-                        val json = JSONObject().apply {
-                            put("name", deviceName)
-                            put("ip", hostIp)
-                            put("port", port)
-                            put("width", width)
-                            put("height", height)
-                            put("model", "${Build.MANUFACTURER} ${Build.MODEL}")
-                            put("shizuku", hasShizuku)
-                        }
-                        val data = json.toString().toByteArray(Charsets.UTF_8)
                         val broadcastAddresses = NetworkUtils.getAllBroadcastAddresses()
                         for (broadcastAddr in broadcastAddresses) {
                             try {
@@ -66,7 +67,7 @@ object DiscoveryBeacon {
                             } catch (_: Exception) {}
                         }
 
-                        // Also send direct unicast to 192.168.43.1 in case the controller is the hotspot
+                        // Also send direct unicast to 192.168.43.1 (in case the controller is the hotspot)
                         try {
                             val hotspotGateway = InetAddress.getByName("192.168.43.1")
                             val unicastPacket = DatagramPacket(data, data.size, hotspotGateway, DISCOVERY_PORT)
@@ -74,9 +75,9 @@ object DiscoveryBeacon {
                         } catch (_: Exception) {}
 
                     } catch (e: Exception) {
-                        Log.w(TAG, "Beacon send error: ${e.message}")
+                        Log.w(TAG, "Beacon broadcast error: ${e.message}")
                     }
-                    delay(1500)
+                    delay(1000)
                 }
             } catch (e: Exception) {
                 Log.e(TAG, "Broadcasting failed", e)
@@ -105,10 +106,10 @@ object DiscoveryBeacon {
                 // Cleanup coroutine for stale devices
                 launch {
                     while (isActive) {
-                        delay(3000)
+                        delay(2500)
                         val now = System.currentTimeMillis()
                         _discoveredDevices.value = _discoveredDevices.value.filter {
-                            now - it.lastSeenTimestamp < 7000
+                            now - it.lastSeenTimestamp < 6000
                         }
                     }
                 }
@@ -119,30 +120,31 @@ object DiscoveryBeacon {
                 while (isActive) {
                     try {
                         socket.receive(packet)
-                        val message = String(packet.data, packet.offset, packet.length, Charsets.UTF_8)
-                        val json = JSONObject(message)
+                        val message = String(packet.data, packet.offset, packet.length, Charsets.UTF_8).trim()
 
-                        // Priority: use the packet's sender IP as it is the proven routable IP across this network
-                        val packetSenderIp = packet.address?.hostAddress
-                        val resolvedIp = if (!packetSenderIp.isNullOrBlank() && packetSenderIp != "0.0.0.0" && packetSenderIp != "127.0.0.1") {
-                            packetSenderIp
-                        } else {
-                            val jsonIp = json.optString("ip", "")
-                            if (jsonIp.isNotBlank() && jsonIp != "127.0.0.1") jsonIp else "192.168.43.1"
+                        if (message.startsWith("{")) {
+                            val json = JSONObject(message)
+                            val packetSenderIp = packet.address?.hostAddress
+                            val resolvedIp = if (!packetSenderIp.isNullOrBlank() && packetSenderIp != "0.0.0.0" && packetSenderIp != "127.0.0.1") {
+                                packetSenderIp
+                            } else {
+                                val jsonIp = json.optString("ip", "")
+                                if (jsonIp.isNotBlank() && jsonIp != "127.0.0.1") jsonIp else "192.168.43.1"
+                            }
+
+                            val device = DeviceInfo(
+                                deviceName = json.optString("name", "Android Device"),
+                                ipAddress = resolvedIp,
+                                port = json.optInt("port", 45556),
+                                screenWidth = json.optInt("width", 1080),
+                                screenHeight = json.optInt("height", 1920),
+                                osVersion = json.optString("model", "Android"),
+                                hasShizuku = json.optBoolean("shizuku", false),
+                                lastSeenTimestamp = System.currentTimeMillis()
+                            )
+
+                            addOrUpdateDevice(device)
                         }
-
-                        val device = DeviceInfo(
-                            deviceName = json.optString("name", "Android Device"),
-                            ipAddress = resolvedIp,
-                            port = json.optInt("port", 45556),
-                            screenWidth = json.optInt("width", 1080),
-                            screenHeight = json.optInt("height", 1920),
-                            osVersion = json.optString("model", "Android"),
-                            hasShizuku = json.optBoolean("shizuku", false),
-                            lastSeenTimestamp = System.currentTimeMillis()
-                        )
-
-                        addOrUpdateDevice(device)
                     } catch (e: Exception) {
                         if (!isActive) break
                     }
@@ -151,42 +153,6 @@ object DiscoveryBeacon {
                 Log.e(TAG, "Listener socket failed", e)
             } finally {
                 socket?.close()
-            }
-        }
-
-        // Active TCP probe for Hotspot Host (bypasses Android Tethering UDP broadcast blocking)
-        probeJob?.cancel()
-        probeJob = CoroutineScope(Dispatchers.IO).launch {
-            while (isActive) {
-                val targets = mutableListOf<String>()
-                val gateway = NetworkUtils.getGatewayIp(context)
-                if (!gateway.isNullOrBlank() && gateway != "0.0.0.0") {
-                    targets.add(gateway)
-                }
-                targets.add("192.168.43.1")
-
-                for (target in targets.distinct()) {
-                    try {
-                        val testSocket = Socket()
-                        testSocket.connect(InetSocketAddress(target, 45556), 600)
-                        testSocket.close()
-
-                        val device = DeviceInfo(
-                            deviceName = if (target == "192.168.43.1") "Hotspot Host (192.168.43.1)" else "Host Device ($target)",
-                            ipAddress = target,
-                            port = 45556,
-                            screenWidth = 1080,
-                            screenHeight = 1920,
-                            osVersion = "Direct Hotspot",
-                            hasShizuku = true,
-                            lastSeenTimestamp = System.currentTimeMillis()
-                        )
-                        addOrUpdateDevice(device)
-                    } catch (_: Exception) {
-                        // Target host not running or not reachable yet
-                    }
-                }
-                delay(2500)
             }
         }
     }
@@ -203,8 +169,6 @@ object DiscoveryBeacon {
     }
 
     fun stopListening() {
-        probeJob?.cancel()
-        probeJob = null
         listenerJob?.cancel()
         listenerJob = null
         _discoveredDevices.value = emptyList()
