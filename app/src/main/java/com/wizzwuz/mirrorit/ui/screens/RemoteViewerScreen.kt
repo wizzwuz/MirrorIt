@@ -9,22 +9,18 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
-import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.input.pointer.pointerInteropFilter
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.wizzwuz.mirrorit.model.ControlPacket
 import com.wizzwuz.mirrorit.network.ClientStreamer
 import com.wizzwuz.mirrorit.ui.components.ErgonomicControlBar
-import com.wizzwuz.mirrorit.ui.theme.DarkBackground
 import com.wizzwuz.mirrorit.ui.theme.DarkSurface
 import com.wizzwuz.mirrorit.ui.theme.NeonCyan
 import com.wizzwuz.mirrorit.ui.theme.TextPrimary
 
-@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun RemoteViewerScreen(
     hostIp: String,
@@ -45,7 +41,7 @@ fun RemoteViewerScreen(
             .fillMaxSize()
             .background(Color.Black)
     ) {
-        // Video SurfaceView
+        // Video SurfaceView with Touch listener
         AndroidView(
             factory = { context ->
                 SurfaceView(context).apply {
@@ -63,31 +59,29 @@ fun RemoteViewerScreen(
                             streamer = null
                         }
                     })
+
+                    setOnTouchListener { v, motionEvent ->
+                        val w = v.width.toFloat().coerceAtLeast(1f)
+                        val h = v.height.toFloat().coerceAtLeast(1f)
+                        val normX = (motionEvent.x / w).coerceIn(0f, 1f)
+                        val normY = (motionEvent.y / h).coerceIn(0f, 1f)
+
+                        val action = when (motionEvent.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> ControlPacket.Touch.ACTION_DOWN
+                            MotionEvent.ACTION_MOVE -> ControlPacket.Touch.ACTION_MOVE
+                            MotionEvent.ACTION_UP -> ControlPacket.Touch.ACTION_UP
+                            MotionEvent.ACTION_CANCEL -> ControlPacket.Touch.ACTION_CANCEL
+                            else -> -1
+                        }
+
+                        if (action != -1) {
+                            streamer?.sendTouch(action, motionEvent.getPointerId(0), normX, normY)
+                        }
+                        true
+                    }
                 }
             },
-            modifier = Modifier
-                .fillMaxSize()
-                .pointerInteropFilter { motionEvent ->
-                    val viewWidth = 1080f // Fallback standard
-                    val viewHeight = 1920f
-                    val normX = (motionEvent.x / (motionEvent.device?.getMotionRange(MotionEvent.AXIS_X)?.range ?: 1080f))
-                        .coerceIn(0f, 1f)
-                    val normY = (motionEvent.y / (motionEvent.device?.getMotionRange(MotionEvent.AXIS_Y)?.range ?: 1920f))
-                        .coerceIn(0f, 1f)
-
-                    val action = when (motionEvent.actionMasked) {
-                        MotionEvent.ACTION_DOWN -> ControlPacket.Touch.ACTION_DOWN
-                        MotionEvent.ACTION_MOVE -> ControlPacket.Touch.ACTION_MOVE
-                        MotionEvent.ACTION_UP -> ControlPacket.Touch.ACTION_UP
-                        MotionEvent.ACTION_CANCEL -> ControlPacket.Touch.ACTION_CANCEL
-                        else -> -1
-                    }
-
-                    if (action != -1) {
-                        streamer?.sendTouch(action, motionEvent.getPointerId(0), normX, normY)
-                    }
-                    true
-                }
+            modifier = Modifier.fillMaxSize()
         )
 
         // Connecting Indicator
