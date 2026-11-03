@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.wizzwuz.mirrorit.model.DeviceInfo
 import com.wizzwuz.mirrorit.network.DiscoveryBeacon
+import com.wizzwuz.mirrorit.network.NetworkUtils
 import com.wizzwuz.mirrorit.ui.theme.*
 
 @Composable
